@@ -24,10 +24,10 @@ ZOHO_CONFIG = {
     "api_domain": os.environ.get("ZOHO_API_DOMAIN", "https://www.zohoapis.com"),
     "desk_domain": os.environ.get("ZOHO_DESK_DOMAIN", "https://desk.zoho.com"),
     "accounts_domain": os.environ.get("ZOHO_ACCOUNTS_DOMAIN", "https://accounts.zoho.com"),
-    "access_token": os.environ.get("ZOHO_ACCESS_TOKEN", "1000.ca1296e19da253b83bd0e08af38328da.737d508eaf67fd0d0e26ccf486117d73"),
-    "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", "1000.73523f2b29c511168f1649d1d3c5a197.4b040af68d3595c99ba8a6b17ab208e4"),
-    "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
-    "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", "")
+    "access_token": os.environ.get("ZOHO_ACCESS_TOKEN", "1000.cb659a3f9950794c4d1b0039b29f799e.242e975d2068ed9a19ea11f70fd33155"),
+    "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", "1000.4ca7b79bb75d12ed74b2ba240f51987a.71221e09f1da6a1ece7bddc02c3126dc"),
+    "client_id": os.environ.get("ZOHO_CLIENT_ID", "1000.82FN6LDFUHETKSEQE7QLVIEHCSB7IO"),
+    "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", "935ff64a0d3ae30e4784f3f6f1a58eb972e54528c8")
 }
 
 class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
