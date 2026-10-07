@@ -16,18 +16,18 @@ import ssl
 # Bypass SSL cert verify issues on local macOS Python
 ssl_context = ssl._create_unverified_context()
 
-PORT = 8123
+PORT = int(os.environ.get("PORT", 8123))
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
-# Default Zoho OAuth Credentials
+# Default Zoho OAuth Credentials (can be overridden via Environment Variables)
 ZOHO_CONFIG = {
-    "api_domain": "https://www.zohoapis.com",
-    "desk_domain": "https://desk.zoho.com",
-    "accounts_domain": "https://accounts.zoho.com",
-    "access_token": "1000.ca1296e19da253b83bd0e08af38328da.737d508eaf67fd0d0e26ccf486117d73",
-    "refresh_token": "1000.73523f2b29c511168f1649d1d3c5a197.4b040af68d3595c99ba8a6b17ab208e4",
-    "client_id": "",
-    "client_secret": ""
+    "api_domain": os.environ.get("ZOHO_API_DOMAIN", "https://www.zohoapis.com"),
+    "desk_domain": os.environ.get("ZOHO_DESK_DOMAIN", "https://desk.zoho.com"),
+    "accounts_domain": os.environ.get("ZOHO_ACCOUNTS_DOMAIN", "https://accounts.zoho.com"),
+    "access_token": os.environ.get("ZOHO_ACCESS_TOKEN", "1000.ca1296e19da253b83bd0e08af38328da.737d508eaf67fd0d0e26ccf486117d73"),
+    "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", "1000.73523f2b29c511168f1649d1d3c5a197.4b040af68d3595c99ba8a6b17ab208e4"),
+    "client_id": os.environ.get("ZOHO_CLIENT_ID", ""),
+    "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", "")
 }
 
 class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -46,6 +46,10 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self._set_cors_headers(200)
 
     def do_GET(self):
+        # 0. Route root URL '/' directly to webform.html
+        if self.path == "/" or self.path == "":
+            self.path = "/webform.html"
+
         # 1. API: Fetch active CRM users
         if self.path.startswith("/api/users"):
             self.handle_get_users()

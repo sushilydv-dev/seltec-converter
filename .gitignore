@@ -1,22 +1,13 @@
 # Environment & Secret files
 .env
-.env.*
-*.env
+.env.local
 config.json
-
-# Dependencies
-node_modules/
-dist/
-build/
 
 # Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
-.venv/
-env/
-venv/
 
 # Operating System & IDE
 .DS_Store

@@ -1,0 +1,2 @@
+# Efficio Hub requires no external pip packages
+# Uses standard Python 3 libraries (http.server, urllib, json, ssl)
