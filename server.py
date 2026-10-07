@@ -24,8 +24,8 @@ ZOHO_CONFIG = {
     "api_domain": os.environ.get("ZOHO_API_DOMAIN", "https://www.zohoapis.com"),
     "desk_domain": os.environ.get("ZOHO_DESK_DOMAIN", "https://desk.zoho.com"),
     "accounts_domain": os.environ.get("ZOHO_ACCOUNTS_DOMAIN", "https://accounts.zoho.com"),
-    "access_token": os.environ.get("ZOHO_ACCESS_TOKEN", "1000.a5970248cf04ebab634f8da3d7ce9dc2.ce8e929af952d7ebefc3bd2d907b6d0a"),
-    "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", "1000.02bf4af53cf89a1f299b5a5dd43348b6.f38b69f75cb9e0c492fb8fd73f2a4cad"),
+    "access_token": os.environ.get("ZOHO_ACCESS_TOKEN", "1000.d47c891102b3a79842b513d7c915f750.9438d855d33a4f673dd49e59171b5d92"),
+    "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN", "1000.2b4ee406c82aa28886141177da5cd9d5.b793e8b513bcb02da9bf3bd3a8670fca"),
     "client_id": os.environ.get("ZOHO_CLIENT_ID", "1000.82FN6LDFUHETKSEQE7QLVIEHCSB7IO"),
     "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", "935ff64a0d3ae30e4784f3f6f1a58eb972e54528c8")
 }
