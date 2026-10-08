@@ -515,8 +515,10 @@
             <span><strong>Zoho Desk Ticket Conversion:</strong> Enter a Ticket ID to pre-fill customer fields automatically.</span>
         </div>
         <div style="display: flex; gap: 8px;">
-            <input type="text" id="deskTicketInput" class="crm-input" style="width: 180px; height: 28px; font-size: 12px;" placeholder="Ticket # / ID">
+            <input type="text" id="deskTicketInput" class="crm-input" style="width: 180px; height: 28px; font-size: 12px;" placeholder="Desk Ticket ID" onkeydown="if(event.key === 'Enter'){event.preventDefault(); prefillFromDesk();}">
             <button class="crm-btn crm-btn-secondary" style="padding: 2px 10px; font-size: 11.5px; height: 28px;" onclick="prefillFromDesk()">⚡ Pre-fill</button>
+            <label for="deskLeadId" style="align-self:center; white-space:nowrap;">Linked Lead ID</label>
+            <input type="text" id="deskLeadId" class="crm-input" style="width: 190px; height: 28px; font-size: 12px;" placeholder="Fetched from ticket" readonly>
         </div>
     </div>
 </div>
@@ -556,7 +558,7 @@
                             <select id="Owner" name="Owner" class="crm-select" style="padding-right: 32px;" required>
                                 <option value="">⏳ Fetching CRM Users...</option>
                             </select>
-                            <button type="button" class="crm-lookup-btn" onclick="fetchCrmUsers()" title="Reload Users from Zoho CRM">👤</button>
+                            <button type="button" class="crm-lookup-btn" onclick="crmUsersReady = fetchCrmUsers()" title="Reload Users from Zoho CRM">👤</button>
                         </div>
                     </div>
                 </div>
@@ -1128,6 +1130,7 @@
         accessToken: "1000.d47c891102b3a79842b513d7c915f750.9438d855d33a4f673dd49e59171b5d92",
         refreshToken: "1000.2b4ee406c82aa28886141177da5cd9d5.b793e8b513bcb02da9bf3bd3a8670fca"
     };
+    let crmUsersReady = Promise.resolve();
 
     // Country to State lookup dictionary
     const countryStates = {
@@ -1165,7 +1168,7 @@
         loadSavedConfig();
         applyVisibilityRules();
         updateStateOptions();
-        fetchCrmUsers();
+        crmUsersReady = fetchCrmUsers();
     });
 
     function loadSavedConfig() {
@@ -1214,6 +1217,8 @@
         users.forEach((user) => {
             const opt = document.createElement('option');
             opt.value = user.id;
+            opt.dataset.email = user.email || '';
+            opt.dataset.fullName = user.full_name || user.name || '';
             const roleInfo = user.role ? ` (${user.role})` : '';
             opt.textContent = `${user.full_name || user.name}${roleInfo}`;
             
@@ -1277,10 +1282,11 @@
     async function prefillFromDesk() {
         const ticketId = document.getElementById('deskTicketInput').value.trim();
         if (!ticketId) {
-            alert('Please enter a Desk Ticket ID or Number');
+            showToast('Enter a Zoho Desk ticket ID first.');
             return;
         }
 
+        document.getElementById('deskLeadId').value = '';
         showToast(`Fetching Ticket #${ticketId} from Zoho Desk...`);
 
         const endpoints = [`/api/desk/ticket/${encodeURIComponent(ticketId)}`];
@@ -1288,29 +1294,154 @@
         for (let url of endpoints) {
             try {
                 const response = await fetch(url);
+                const responseBody = await response.json();
+                if (!response.ok) {
+                    throw new Error(responseBody.error || responseBody.message || `Zoho Desk returned ${response.status}`);
+                }
 
-                if (response.ok) {
-                    const ticket = await response.json();
-                    if (ticket.contact) {
-                        if (ticket.contact.firstName) document.getElementById('First_Name').value = ticket.contact.firstName;
-                        if (ticket.contact.lastName) document.getElementById('Last_Name').value = ticket.contact.lastName;
-                        if (ticket.contact.email) document.getElementById('Email').value = ticket.contact.email;
-                        if (ticket.contact.mobile) document.getElementById('Mobile').value = ticket.contact.mobile;
-                        if (ticket.contact.account) document.getElementById('Company').value = ticket.contact.account.accountName;
+                const ticket = responseBody.ticket
+                    || (Array.isArray(responseBody.data) ? responseBody.data[0] : responseBody.data)
+                    || responseBody;
+                const contactLookup = ticket.contact || ticket.contactId;
+                const accountLookup = ticket.account || ticket.accountId;
+                const ticketOwner = ticket.assignee || ticket.assigneeId || ticket.ticketOwner;
+                let contact = typeof contactLookup === 'object' && contactLookup !== null ? contactLookup : {};
+                let account = typeof accountLookup === 'object' && accountLookup !== null ? accountLookup : {};
+                let owner = typeof ticketOwner === 'object' && ticketOwner !== null ? ticketOwner : {};
+
+                const lookupRequests = [];
+                if (
+                    !contact.firstName
+                    && !contact.lastName
+                    && (typeof contactLookup === 'string' || typeof contactLookup === 'number')
+                ) {
+                    lookupRequests.push(
+                        fetch(`/api/desk/contacts/${encodeURIComponent(contactLookup)}`)
+                            .then(async result => {
+                                const body = await result.json();
+                                if (!result.ok) throw new Error(body.error || body.message || `Contact lookup returned ${result.status}`);
+                                contact = body.contact || body;
+                            })
+                    );
+                }
+                if (
+                    !account.accountName
+                    && !account.name
+                    && (typeof accountLookup === 'string' || typeof accountLookup === 'number')
+                ) {
+                    lookupRequests.push(
+                        fetch(`/api/desk/accounts/${encodeURIComponent(accountLookup)}`)
+                            .then(async result => {
+                                const body = await result.json();
+                                if (!result.ok) throw new Error(body.error || body.message || `Account lookup returned ${result.status}`);
+                                account = body.account || body;
+                            })
+                    );
+                }
+                if (
+                    !owner.name
+                    && !owner.fullName
+                    && !owner.email
+                    && (typeof ticketOwner === 'string' || typeof ticketOwner === 'number')
+                ) {
+                    lookupRequests.push(
+                            fetch(`/api/desk/agents/${encodeURIComponent(ticketOwner)}`)
+                                .then(async result => {
+                                    const body = await result.json();
+                                    if (!result.ok) throw new Error(body.error || body.message || `Agent lookup returned ${result.status}`);
+                                    owner = body.agent || body;
+                                })
+                    );
+                }
+                const lookupResults = await Promise.allSettled(lookupRequests);
+                lookupResults.forEach(result => {
+                    if (result.status === 'rejected') console.warn('Desk lookup detail request failed:', result.reason);
+                });
+
+                await crmUsersReady;
+                const ownerName = owner.name
+                    || owner.fullName
+                    || [owner.firstName, owner.lastName].filter(Boolean).join(' ');
+                const ownerEmail = (owner.email || '').trim().toLowerCase();
+                const normalizedOwnerName = ownerName.trim().toLowerCase();
+                const ownerOptions = [...document.getElementById('Owner').options];
+                const matchingOwner = ownerOptions.find(option =>
+                    ownerEmail && option.dataset.email?.trim().toLowerCase() === ownerEmail
+                ) || ownerOptions.find(option =>
+                    normalizedOwnerName
+                    && option.dataset.fullName?.trim().toLowerCase() === normalizedOwnerName
+                );
+                if (matchingOwner) {
+                    document.getElementById('Owner').value = matchingOwner.value;
+                }
+
+                const customFields = ticket.cf || ticket.customFields || {};
+                const leadId = ticket.cf_crmleadid
+                    || ticket.crmleadid
+                    || customFields.cf_crmleadid
+                    || customFields.crmleadid
+                    || '';
+                document.getElementById('deskLeadId').value =
+                    typeof leadId === 'object' && leadId !== null ? (leadId.value || leadId.name || '') : leadId;
+
+                const fields = [
+                    ['First_Name', contact.firstName || contact.first_name || ticket.firstName],
+                    ['Last_Name', contact.lastName || contact.last_name || ticket.lastName],
+                    ['Email', ticket.email || contact.email],
+                    ['Mobile', ticket.phone || ticket.mobile || contact.mobile || contact.phone],
+                    [
+                        'Company',
+                        account.accountName
+                            || account.name
+                            || ticket.accountName
+                            || contact.account?.accountName
+                            || contact.account?.name
+                    ]
+                ];
+                let populatedCount = 0;
+                fields.forEach(([fieldId, value]) => {
+                    if (value) {
+                        document.getElementById(fieldId).value = value;
+                        populatedCount += 1;
                     }
-                    if (ticket.subject) {
-                        document.getElementById('Remarks').value = `Ticket #${ticket.ticketNumber || ticketId}: ${ticket.subject}\n${ticket.description || ''}`;
-                    }
-                    document.getElementById('Lead_Source').value = 'DESK';
-                    showToast(`Populated customer info from Ticket #${ticket.ticketNumber || ticketId}`);
+                });
+
+                const businessUnitValue = customFields.cf_bussiness_unit || ticket.cf_bussiness_unit;
+                const businessUnit = typeof businessUnitValue === 'object' && businessUnitValue !== null
+                    ? (businessUnitValue.value || businessUnitValue.name)
+                    : businessUnitValue;
+                const businessUnitSelect = document.getElementById('Business_Unit_Company');
+                if (businessUnit && [...businessUnitSelect.options].some(option => option.value === businessUnit)) {
+                    businessUnitSelect.value = businessUnit;
+                    populatedCount += 1;
+                }
+
+                if (ticket.subject || ticket.description) {
+                    document.getElementById('Remarks').value =
+                        `Ticket #${ticket.ticketNumber || ticketId}: ${ticket.subject || ''}\n${ticket.description || ''}`.trim();
+                    populatedCount += 1;
+                }
+                if (document.getElementById('deskLeadId').value) populatedCount += 1;
+                if (matchingOwner) populatedCount += 1;
+
+                if (populatedCount === 0) {
+                    showToast(`Ticket was found, but it contained no fields this form can populate. Check the ticket ID and API response.`);
                     return;
                 }
-            } catch(e) {
-                console.warn(`Desk query on ${url} failed:`, e);
+                document.getElementById('Lead_Source').value = 'DESK';
+                const ownerMessage = matchingOwner
+                    ? ` Ticket owner assigned to ${matchingOwner.dataset.fullName}.`
+                    : ownerName || ownerEmail
+                        ? ` Could not match ticket owner "${ownerName || ownerEmail}" to a CRM user; select the owner manually.`
+                        : '';
+                showToast(`Ticket #${ticket.ticketNumber || ticketId} loaded; ${populatedCount} form field(s) populated.${ownerMessage}`);
+                return;
+            } catch (error) {
+                console.error(`Desk ticket lookup failed for ${url}:`, error);
+                showToast(`Could not load ticket: ${error.message}`);
+                return;
             }
         }
-
-        showToast('Note: Enter fields directly or check Desk token in Settings.');
     }
 
     // 5. Submit Lead to Zoho CRM API v6
@@ -1445,6 +1576,8 @@
 
     function resetForm() {
         document.getElementById('leadForm').reset();
+        document.getElementById('deskTicketInput').value = '';
+        document.getElementById('deskLeadId').value = '';
         document.getElementById('Country').value = 'United Arab Emirates';
         updateStateOptions();
         document.getElementById('Lead_Stage').value = 'New';
@@ -1483,7 +1616,7 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(zohoConfig));
             closeSettingsModal();
             showToast('API credentials saved.');
-            fetchCrmUsers();
+            crmUsersReady = fetchCrmUsers();
         } catch (error) {
             showToast(`Could not save API settings: ${error.message}`);
         }

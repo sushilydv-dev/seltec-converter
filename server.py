@@ -133,11 +133,23 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         # 2. API: Fetch Desk ticket
         if self.path.startswith("/api/desk/ticket/"):
-            ticket_id = self.path.split("/")[-1].split("?")[0]
+            ticket_id = urllib.parse.unquote(
+                self.path.split("/")[-1].split("?")[0]
+            )
             self.handle_get_desk_ticket(ticket_id)
             return
 
-        # 3. Static Files (webform.html, index.html, etc.)
+        # 3. API: Fetch Desk contact/account lookup details
+        for resource in ("contacts", "accounts", "agents"):
+            prefix = f"/api/desk/{resource}/"
+            if self.path.startswith(prefix):
+                resource_id = urllib.parse.unquote(
+                    self.path[len(prefix):].split("?")[0]
+                )
+                self.handle_get_desk_lookup(resource, resource_id)
+                return
+
+        # 4. Static Files (webform.html, index.html, etc.)
         super().do_GET()
 
     def do_POST(self):
@@ -229,8 +241,29 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_get_desk_ticket(self, ticket_id):
         """Proxy GET /api/v1/tickets/{ticket_id}"""
-        url = f"{ZOHO_CONFIG['desk_domain']}/api/v1/tickets/{ticket_id}"
+        url = (
+            f"{ZOHO_CONFIG['desk_domain']}/api/v1/tickets/"
+            f"{urllib.parse.quote(ticket_id, safe='')}"
+        )
 
+        try:
+            body = zoho_request(url)
+            self._set_cors_headers(200)
+            self.wfile.write(body)
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8")
+            self._set_cors_headers(e.code)
+            self.wfile.write(err_body.encode())
+        except Exception as e:
+            self._set_cors_headers(500)
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def handle_get_desk_lookup(self, resource, resource_id):
+        """Proxy Desk contact/account lookup requests for ticket prefill."""
+        url = (
+            f"{ZOHO_CONFIG['desk_domain']}/api/v1/{resource}/"
+            f"{urllib.parse.quote(resource_id, safe='')}"
+        )
         try:
             body = zoho_request(url)
             self._set_cors_headers(200)
