@@ -8,10 +8,13 @@ import http.server
 import socketserver
 import urllib.request
 import urllib.error
+import urllib.parse
 import json
 import os
 import sys
 import ssl
+import threading
+import time
 
 # Bypass SSL cert verify issues on local macOS Python
 ssl_context = ssl._create_unverified_context()
@@ -29,6 +32,79 @@ ZOHO_CONFIG = {
     "client_id": os.environ.get("ZOHO_CLIENT_ID", "1000.82FN6LDFUHETKSEQE7QLVIEHCSB7IO"),
     "client_secret": os.environ.get("ZOHO_CLIENT_SECRET", "935ff64a0d3ae30e4784f3f6f1a58eb972e54528c8")
 }
+ZOHO_TOKEN_LOCK = threading.Lock()
+ZOHO_ACCESS_TOKEN_EXPIRES_AT = None
+
+
+def refresh_access_token(client_id=None, client_secret=None, refresh_token=None):
+    """Exchange the configured refresh token for a fresh Zoho access token."""
+    global ZOHO_ACCESS_TOKEN_EXPIRES_AT
+
+    with ZOHO_TOKEN_LOCK:
+        client_id = client_id or ZOHO_CONFIG["client_id"]
+        client_secret = client_secret or ZOHO_CONFIG["client_secret"]
+        refresh_token = refresh_token or ZOHO_CONFIG["refresh_token"]
+        if not client_id or not client_secret or not refresh_token:
+            raise ValueError("Zoho client ID, client secret, and refresh token are required")
+
+        form_data = urllib.parse.urlencode({
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "refresh_token",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{ZOHO_CONFIG['accounts_domain']}/oauth/v2/token",
+            data=form_data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, context=ssl_context) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        new_access_token = result.get("access_token")
+        if not new_access_token:
+            raise RuntimeError(
+                f"Zoho did not return an access token: {result.get('error', 'unknown OAuth error')}"
+            )
+
+        ZOHO_CONFIG["access_token"] = new_access_token
+        if result.get("refresh_token"):
+            ZOHO_CONFIG["refresh_token"] = result["refresh_token"]
+        expires_in = result.get("expires_in")
+        ZOHO_ACCESS_TOKEN_EXPIRES_AT = (
+            time.time() + int(expires_in) if expires_in is not None else None
+        )
+        return result
+
+
+def zoho_request(url, method="GET", data=None, headers=None):
+    """Make a Zoho request, refreshing and retrying once for an expired token."""
+    if (
+        ZOHO_ACCESS_TOKEN_EXPIRES_AT is not None
+        and time.time() >= ZOHO_ACCESS_TOKEN_EXPIRES_AT - 60
+    ):
+        refresh_access_token()
+
+    def make_request():
+        request_headers = dict(headers or {})
+        request_headers["Authorization"] = f"Zoho-oauthtoken {ZOHO_CONFIG['access_token']}"
+        request = urllib.request.Request(
+            url, data=data, headers=request_headers, method=method
+        )
+        return urllib.request.urlopen(request, context=ssl_context)
+
+    try:
+        with make_request() as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code != 401:
+            raise
+        error.close()
+
+    refresh_access_token()
+    with make_request() as response:
+        return response.read()
 
 class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -88,36 +164,31 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_users(self):
         """Proxy GET /crm/v6/users?type=ActiveUsers"""
         url = f"{ZOHO_CONFIG['api_domain']}/crm/v6/users?type=ActiveUsers"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Zoho-oauthtoken {ZOHO_CONFIG['access_token']}",
-            "Content-Type": "application/json"
-        })
 
         try:
-            with urllib.request.urlopen(req, context=ssl_context) as response:
-                body = response.read()
-                data = json.loads(body.decode("utf-8"))
+            body = zoho_request(url, headers={"Content-Type": "application/json"})
+            data = json.loads(body.decode("utf-8"))
                 
-                # Filter strictly active users and exclude deleted
-                active_users = [
-                    {
-                        "id": u.get("id"),
-                        "full_name": u.get("full_name"),
-                        "email": u.get("email"),
-                        "role": u.get("role", {}).get("name") if isinstance(u.get("role"), dict) else u.get("role"),
-                        "profile": u.get("profile", {}).get("name") if isinstance(u.get("profile"), dict) else u.get("profile"),
-                        "status": u.get("status")
-                    }
-                    for u in data.get("users", [])
-                    if u.get("status") == "active"
-                ]
+            # Filter strictly active users and exclude deleted
+            active_users = [
+                {
+                    "id": u.get("id"),
+                    "full_name": u.get("full_name"),
+                    "email": u.get("email"),
+                    "role": u.get("role", {}).get("name") if isinstance(u.get("role"), dict) else u.get("role"),
+                    "profile": u.get("profile", {}).get("name") if isinstance(u.get("profile"), dict) else u.get("profile"),
+                    "status": u.get("status")
+                }
+                for u in data.get("users", [])
+                if u.get("status") == "active"
+            ]
 
-                # Sort by full_name
-                active_users.sort(key=lambda x: x["full_name"] or "")
+            # Sort by full_name
+            active_users.sort(key=lambda x: x["full_name"] or "")
 
-                cleaned_response = json.dumps({"users": active_users})
-                self._set_cors_headers(200)
-                self.wfile.write(cleaned_response.encode("utf-8"))
+            cleaned_response = json.dumps({"users": active_users})
+            self._set_cors_headers(200)
+            self.wfile.write(cleaned_response.encode("utf-8"))
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8")
             print(f"[Error] Zoho CRM Users API returned {e.code}: {err_body}")
@@ -136,17 +207,16 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         url = f"{ZOHO_CONFIG['api_domain']}/crm/v6/Leads"
         print(f"[Lead Submission] Sending payload to {url}: {post_body.decode('utf-8')[:200]}...")
 
-        req = urllib.request.Request(url, data=post_body, headers={
-            "Authorization": f"Zoho-oauthtoken {ZOHO_CONFIG['access_token']}",
-            "Content-Type": "application/json"
-        }, method="POST")
-
         try:
-            with urllib.request.urlopen(req, context=ssl_context) as response:
-                body = response.read()
-                print(f"[Success] Zoho Response: {body.decode('utf-8')}")
-                self._set_cors_headers(200)
-                self.wfile.write(body)
+            body = zoho_request(
+                url,
+                method="POST",
+                data=post_body,
+                headers={"Content-Type": "application/json"},
+            )
+            print(f"[Success] Zoho Response: {body.decode('utf-8')}")
+            self._set_cors_headers(200)
+            self.wfile.write(body)
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8")
             print(f"[HTTP Error] Zoho CRM returned status {e.code}: {err_body}")
@@ -160,15 +230,11 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_desk_ticket(self, ticket_id):
         """Proxy GET /api/v1/tickets/{ticket_id}"""
         url = f"{ZOHO_CONFIG['desk_domain']}/api/v1/tickets/{ticket_id}"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Zoho-oauthtoken {ZOHO_CONFIG['access_token']}"
-        })
 
         try:
-            with urllib.request.urlopen(req, context=ssl_context) as response:
-                body = response.read()
-                self._set_cors_headers(200)
-                self.wfile.write(body)
+            body = zoho_request(url)
+            self._set_cors_headers(200)
+            self.wfile.write(body)
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8")
             self._set_cors_headers(e.code)
@@ -200,26 +266,18 @@ class ProxyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def handle_refresh_token(self):
         content_len = int(self.headers.get("Content-Length", 0))
         post_body = self.rfile.read(content_len)
-        data = json.loads(post_body.decode("utf-8")) if content_len > 0 else {}
-
-        client_id = data.get("client_id", ZOHO_CONFIG["client_id"])
-        client_secret = data.get("client_secret", ZOHO_CONFIG["client_secret"])
-        refresh_token = data.get("refresh_token", ZOHO_CONFIG["refresh_token"])
-
-        if not client_id or not client_secret:
-            self._set_cors_headers(400)
-            self.wfile.write(json.dumps({"error": "client_id and client_secret required to auto-refresh token"}).encode())
-            return
-
-        refresh_url = f"{ZOHO_CONFIG['accounts_domain']}/oauth/v2/token?refresh_token={refresh_token}&client_id={client_id}&client_secret={client_secret}&grant_type=refresh_token"
-        req = urllib.request.Request(refresh_url, method="POST")
         try:
-            with urllib.request.urlopen(req) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                if "access_token" in result:
-                    ZOHO_CONFIG["access_token"] = result["access_token"]
-                self._set_cors_headers(200)
-                self.wfile.write(json.dumps(result).encode())
+            data = json.loads(post_body.decode("utf-8")) if content_len > 0 else {}
+            result = refresh_access_token(
+                client_id=data.get("client_id"),
+                client_secret=data.get("client_secret"),
+                refresh_token=data.get("refresh_token"),
+            )
+            self._set_cors_headers(200)
+            self.wfile.write(json.dumps(result).encode())
+        except ValueError as e:
+            self._set_cors_headers(400)
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
         except Exception as e:
             self._set_cors_headers(500)
             self.wfile.write(json.dumps({"error": str(e)}).encode())

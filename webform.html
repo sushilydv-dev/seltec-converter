@@ -1177,22 +1177,18 @@
         }
     }
 
-    // 1. Fetch Users directly from Zoho CRM API
+    // 1. Fetch users through the local proxy so token refresh is handled server-side.
     async function fetchCrmUsers() {
         const ownerSelect = document.getElementById('Owner');
         ownerSelect.innerHTML = '<option value="">⏳ Loading Lead Owners...</option>';
 
-        // Try local proxy first to avoid CORS, fallback to direct
-        const endpoints = ['/api/users', `${zohoConfig.apiDomain}/crm/v6/users?type=ActiveUsers`];
+        const endpoints = ['/api/users'];
 
         for (let url of endpoints) {
             try {
                 const response = await fetch(url, {
                     method: 'GET',
-                    headers: {
-                        'Authorization': `Zoho-oauthtoken ${zohoConfig.accessToken}`,
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Content-Type': 'application/json' }
                 });
 
                 if (response.ok) {
@@ -1287,13 +1283,11 @@
 
         showToast(`Fetching Ticket #${ticketId} from Zoho Desk...`);
 
-        const endpoints = [`/api/desk/ticket/${ticketId}`, `${zohoConfig.deskDomain}/api/v1/tickets/${ticketId}`];
+        const endpoints = [`/api/desk/ticket/${encodeURIComponent(ticketId)}`];
 
         for (let url of endpoints) {
             try {
-                const response = await fetch(url, {
-                    headers: { 'Authorization': `Zoho-oauthtoken ${zohoConfig.accessToken}` }
-                });
+                const response = await fetch(url);
 
                 if (response.ok) {
                     const ticket = await response.json();
@@ -1401,7 +1395,7 @@
         console.log('Sending Zoho CRM Lead Payload:', payload);
 
         // Try proxy endpoint first to bypass browser CORS
-        const endpoints = ['/api/leads', `${zohoConfig.apiDomain}/crm/v6/Leads`];
+        const endpoints = ['/api/leads'];
         let lastError = null;
         let success = false;
 
@@ -1409,10 +1403,7 @@
             try {
                 const response = await fetch(url, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Zoho-oauthtoken ${zohoConfig.accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
@@ -1472,14 +1463,30 @@
         document.getElementById('settingsModal').style.display = 'none';
     }
 
-    function saveSettings() {
+    async function saveSettings() {
         zohoConfig.apiDomain = document.getElementById('cfgDomain').value.trim();
         zohoConfig.accessToken = document.getElementById('cfgToken').value.trim();
         zohoConfig.refreshToken = document.getElementById('cfgRefreshToken').value.trim();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(zohoConfig));
-        closeSettingsModal();
-        showToast('API credentials saved.');
-        fetchCrmUsers();
+        try {
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    api_domain: zohoConfig.apiDomain,
+                    access_token: zohoConfig.accessToken,
+                    refresh_token: zohoConfig.refreshToken
+                })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || `Server returned ${response.status}`);
+
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(zohoConfig));
+            closeSettingsModal();
+            showToast('API credentials saved.');
+            fetchCrmUsers();
+        } catch (error) {
+            showToast(`Could not save API settings: ${error.message}`);
+        }
     }
 
     function showToast(msg) {
