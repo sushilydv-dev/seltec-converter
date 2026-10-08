@@ -1169,7 +1169,37 @@
         applyVisibilityRules();
         updateStateOptions();
         crmUsersReady = fetchCrmUsers();
+        const ticketId = getDeskTicketIdFromUrl();
+        if (ticketId) {
+            document.getElementById('deskTicketInput').value = ticketId;
+            prefillFromDesk();
+        }
     });
+
+    function getDeskTicketIdFromUrl() {
+        const parameters = new URLSearchParams(window.location.search);
+        if (window.location.hash.includes('=')) {
+            const hashParameters = new URLSearchParams(window.location.hash.slice(1));
+            for (const [key, value] of hashParameters) {
+                if (!parameters.has(key)) parameters.set(key, value);
+            }
+        }
+
+        const ticketIdParameters = [
+            'ticketid',
+            'ticket_id',
+            'id',
+            'recordid'
+        ];
+        for (const parameterName of ticketIdParameters) {
+            for (const [key, value] of parameters) {
+                if (key.toLowerCase() === parameterName && value.trim()) {
+                    return value.trim();
+                }
+            }
+        }
+        return '';
+    }
 
     function loadSavedConfig() {
         const saved = localStorage.getItem(STORAGE_KEY);
